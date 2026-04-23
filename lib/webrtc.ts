@@ -1077,6 +1077,13 @@ export function createWebRTCConnection({
   // --- Data Channel Message Handling ---
   function setupDataChannel(peerId: string, dc: RTCDataChannel) {
     dataChannels[peerId] = dc;
+    // Prefer binary for high-throughput transfers (still supports JSON control messages)
+    try {
+      dc.binaryType = 'arraybuffer';
+      dc.bufferedAmountLowThreshold = 1024 * 1024; // 1MiB
+    } catch {
+      // ignore
+    }
     dc.onopen = () => {
     };
     dc.onclose = () => {
@@ -1098,26 +1105,69 @@ export function createWebRTCConnection({
       // Optionally: notify the user or try to reconnect
     };
     dc.onmessage = (event) => {
-      // Simple protocol: {type, ...}
-      let data;
+      // JSON control messages + binary fast-path for file chunks.
+      if (typeof event.data !== 'string') {
+        try {
+          const buf = event.data instanceof ArrayBuffer ? event.data : null;
+          if (!buf) return;
+          handleBinaryMessage(peerId, buf);
+        } catch {
+          return;
+        }
+        return;
+      }
+
+      let data: any;
       try {
         data = JSON.parse(event.data);
-      } catch (e) {
+      } catch {
         return;
       }
       if (data.type === 'chat') {
         events.onMessage?.({ ...data, from: peerId });
+      } else if (data.type === 'file-meta') {
+        const { fileId, name, size, fileType, totalChunks, from, ts } = data;
+        if (!fileId) return;
+        if (!incomingFiles[fileId]) {
+          incomingFiles[fileId] = {
+            chunks: [],
+            received: 0,
+            receivedBytes: 0,
+            size,
+            name,
+            type: fileType,
+            totalChunks,
+            from,
+            ts,
+            startTime: Date.now(),
+            lastTime: Date.now(),
+            lastReceived: 0,
+            messageId: data.messageId,
+          };
+        } else {
+          // Ensure metadata is populated even if chunks arrived first
+          const st = incomingFiles[fileId];
+          st.name = st.name || name;
+          st.size = st.size || size;
+          st.type = st.type || fileType;
+          st.totalChunks = st.totalChunks || totalChunks;
+          st.from = st.from || from;
+          st.ts = st.ts || ts;
+          st.messageId = st.messageId || data.messageId;
+        }
       } else if (data.type === 'file-chunk') {
         // Chunked file receive logic
         const { fileId, name, size, fileType, totalChunks, chunkIndex, chunk, from, ts } = data;
         if (!incomingFiles[fileId]) {
-          incomingFiles[fileId] = { chunks: [], received: 0, size, name, type: fileType, totalChunks, from, ts, startTime: Date.now(), lastTime: Date.now(), lastReceived: 0 };
+          incomingFiles[fileId] = { chunks: [], received: 0, receivedBytes: 0, size, name, type: fileType, totalChunks, from, ts, startTime: Date.now(), lastTime: Date.now(), lastReceived: 0, messageId: data.messageId };
         }
         incomingFiles[fileId].chunks[chunkIndex] = new Uint8Array(chunk);
         incomingFiles[fileId].received++;
         // Download progress
         const fileState = incomingFiles[fileId];
-        const receivedBytes = fileState.chunks.reduce((acc, arr) => acc + (arr ? arr.length : 0), 0);
+        // Avoid O(n^2) reduce; incrementally track received bytes.
+        fileState.receivedBytes += (fileState.chunks[chunkIndex]?.length || 0);
+        const receivedBytes = fileState.receivedBytes;
         const now = Date.now();
         const elapsed = (now - fileState.startTime) / 1000;
         const interval = (now - fileState.lastTime) / 1000;
@@ -1162,7 +1212,7 @@ export function createWebRTCConnection({
             from,
             ts,
             fileId,
-            messageId: data.messageId,
+            messageId: fileState.messageId ?? data.messageId,
           });
           delete incomingFiles[fileId];
         }
@@ -1269,98 +1319,204 @@ export function createWebRTCConnection({
   }
 
   // Add chunked file transfer logic
-  const CHUNK_SIZE = 64 * 1024; // 64KB per chunk (most compatible)
-  const incomingFiles = {} as Record<string, {chunks: Uint8Array[], received: number, size: number, name: string, type: string, totalChunks: number, from: string, ts: number, startTime: number, lastTime: number, lastReceived: number}>;
+  const CHUNK_SIZE = 128 * 1024; // 128KB per chunk (better throughput; still broadly compatible)
+  const incomingFiles = {} as Record<
+    string,
+    {
+      chunks: Uint8Array[];
+      received: number;
+      receivedBytes: number;
+      size: number;
+      name: string;
+      type: string;
+      totalChunks: number;
+      from: string;
+      ts: number;
+      startTime: number;
+      lastTime: number;
+      lastReceived: number;
+      messageId?: string;
+    }
+  >;
   // Add a map to track canceled fileIds
   const canceledFileIds = new Set<string>();
 
-  function sendFile(file: File, fileIdOverride?: string, messageId?: string) {
+  function buildBinaryFileChunk(fileId: string, chunkIndex: number, chunk: Uint8Array) {
+    const fileIdBytes = new TextEncoder().encode(fileId);
+    // Header:
+    // [0]    u8  version = 1
+    // [1..2] u16 fileIdLen
+    // [..]   fileId bytes
+    // next   u32 chunkIndex
+    // then   chunk bytes
+    const headerLen = 1 + 2 + fileIdBytes.length + 4;
+    const out = new Uint8Array(headerLen + chunk.length);
+    out[0] = 1;
+    out[1] = (fileIdBytes.length >>> 8) & 0xff;
+    out[2] = fileIdBytes.length & 0xff;
+    out.set(fileIdBytes, 3);
+    const idxOffset = 3 + fileIdBytes.length;
+    out[idxOffset + 0] = (chunkIndex >>> 24) & 0xff;
+    out[idxOffset + 1] = (chunkIndex >>> 16) & 0xff;
+    out[idxOffset + 2] = (chunkIndex >>> 8) & 0xff;
+    out[idxOffset + 3] = chunkIndex & 0xff;
+    out.set(chunk, idxOffset + 4);
+    return out.buffer;
+  }
+
+  function handleBinaryMessage(peerId: string, buf: ArrayBuffer) {
+    const bytes = new Uint8Array(buf);
+    if (bytes.length < 1 + 2 + 4) return;
+    const version = bytes[0];
+    if (version !== 1) return;
+    const fileIdLen = (bytes[1] << 8) | bytes[2];
+    const minLen = 1 + 2 + fileIdLen + 4;
+    if (bytes.length < minLen) return;
+    const fileId = new TextDecoder().decode(bytes.slice(3, 3 + fileIdLen));
+    const idxOffset = 3 + fileIdLen;
+    const chunkIndex =
+      (bytes[idxOffset + 0] << 24) |
+      (bytes[idxOffset + 1] << 16) |
+      (bytes[idxOffset + 2] << 8) |
+      bytes[idxOffset + 3];
+    const chunk = bytes.slice(idxOffset + 4);
+
+    const st = incomingFiles[fileId];
+    if (!st) return; // wait for meta
+    if (st.chunks[chunkIndex]) return; // duplicate
+    st.chunks[chunkIndex] = chunk;
+    st.received++;
+    st.receivedBytes += chunk.length;
+
+    const receivedBytes = st.receivedBytes;
+    const now = Date.now();
+    const interval = (now - st.lastTime) / 1000;
+    const speed = interval > 0 ? (receivedBytes - st.lastReceived) / interval : 0;
+    const percent = st.size ? Math.min(100, (receivedBytes / st.size) * 100) : 0;
+    const eta = speed > 0 ? (st.size - receivedBytes) / speed : 0;
+
+    events.onFileDownloadProgress?.({
+      fileId,
+      name: st.name,
+      size: st.size,
+      received: receivedBytes,
+      total: st.size,
+      percent,
+      speed,
+      eta,
+      from: st.from || peerId,
+    });
+
+    st.lastReceived = receivedBytes;
+    st.lastTime = now;
+
+    if (st.totalChunks && st.received === st.totalChunks) {
+      const fileData = new Uint8Array(st.size);
+      let offset = 0;
+      for (let i = 0; i < st.totalChunks; i++) {
+        const c = st.chunks[i];
+        if (!c) {
+          delete incomingFiles[fileId];
+          return;
+        }
+        fileData.set(c, offset);
+        offset += c.length;
+      }
+      events.onFile?.({
+        name: st.name,
+        size: st.size,
+        type: st.type,
+        data: fileData.buffer,
+        from: st.from || peerId,
+        ts: st.ts,
+        fileId,
+        messageId: st.messageId,
+      });
+      delete incomingFiles[fileId];
+    }
+  }
+
+  async function waitForBackpressure(dc: RTCDataChannel) {
+    const limit = dc.bufferedAmountLowThreshold || 1024 * 1024;
+    if (dc.bufferedAmount <= limit) return;
+    await new Promise<void>((resolve) => {
+      const prev = dc.onbufferedamountlow;
+      dc.onbufferedamountlow = () => {
+        dc.onbufferedamountlow = prev || null;
+        resolve();
+      };
+    });
+  }
+
+  async function sendFile(file: File, fileIdOverride?: string, messageId?: string) {
     const fileId = fileIdOverride || `${file.name}-${file.size}-${Date.now()}-${Math.random()}`;
     const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
-    let offset = 0;
-    let chunkIndex = 0;
-    const reader = new FileReader();
+    const dcs = Object.values(dataChannels).filter((dc) => dc.readyState === 'open');
+    if (dcs.length === 0) return;
+
+    // Send metadata once (JSON control message)
+    const meta = {
+      type: 'file-meta',
+      fileId,
+      name: file.name,
+      size: file.size,
+      fileType: file.type,
+      totalChunks,
+      from: userId,
+      ts: Date.now(),
+      messageId,
+    };
+    for (const dc of dcs) {
+      try {
+        dc.send(JSON.stringify(meta));
+      } catch {}
+    }
+
     // Progress tracking
     let sentBytes = 0;
     let lastSentBytes = 0;
     let lastTime = Date.now();
-    let startTime = lastTime;
+    const startTime = lastTime;
 
-    // Helper to send with backpressure
-    function sendChunkWithBackpressure(dc: RTCDataChannel, chunkData: any, callback: () => void) {
-      const MAX_BUFFERED_AMOUNT = 512 * 1024; // 512KB (most compatible)
-      function trySend() {
-        if (dc.bufferedAmount < MAX_BUFFERED_AMOUNT) {
-          dc.send(JSON.stringify(chunkData));
-          callback();
-        } else {
-          setTimeout(trySend, 20); // 20ms retry interval
+    for (let chunkIndex = 0; chunkIndex < totalChunks; chunkIndex++) {
+      if (canceledFileIds.has(fileId)) return;
+      const start = chunkIndex * CHUNK_SIZE;
+      const end = Math.min(file.size, start + CHUNK_SIZE);
+      const slice = file.slice(start, end);
+      const ab = await slice.arrayBuffer();
+      if (canceledFileIds.has(fileId)) return;
+      const chunk = new Uint8Array(ab);
+      const payload = buildBinaryFileChunk(fileId, chunkIndex, chunk);
+
+      for (const dc of dcs) {
+        if (dc.readyState !== 'open') continue;
+        await waitForBackpressure(dc);
+        try {
+          dc.send(payload);
+        } catch {
+          // ignore
         }
       }
-      trySend();
-    }
 
-    function sendNextChunk() {
-      if (canceledFileIds.has(fileId)) return;
-      const slice = file.slice(offset, offset + CHUNK_SIZE);
-      reader.onload = () => {
-        // ADD THIS CHECK: If canceled after reading chunk, do not send
-        if (canceledFileIds.has(fileId)) return;
-        const chunk = new Uint8Array(reader.result as ArrayBuffer);
-        const dcs = Object.values(dataChannels).filter(dc => dc.readyState === 'open');
-        let sentCount = 0;
-        function onSent() {
-          sentCount++;
-          if (sentCount === dcs.length) {
-            offset += CHUNK_SIZE;
-            chunkIndex++;
-            sentBytes += chunk.length;
-            // Progress calculation
-            const now = Date.now();
-            const elapsed = (now - startTime) / 1000;
-            const interval = (now - lastTime) / 1000;
-            const speed = interval > 0 ? (sentBytes - lastSentBytes) / interval : 0;
-            const percent = Math.min(100, (sentBytes / file.size) * 100);
-            const eta = speed > 0 ? (file.size - sentBytes) / speed : 0;
-            if (events.onFileUploadProgress) {
-              events.onFileUploadProgress({
-                fileId,
-                name: file.name,
-                size: file.size,
-                sent: sentBytes,
-                total: file.size,
-                percent,
-                speed,
-                eta,
-              });
-            }
-            lastSentBytes = sentBytes;
-            lastTime = now;
-            if (offset < file.size) {
-              sendNextChunk();
-            }
-          }
-        }
-        if (dcs.length === 0) return;
-        for (const dc of dcs) {
-          sendChunkWithBackpressure(dc, {
-            type: 'file-chunk',
-            fileId, // Always include fileId
-            name: file.name,
-            size: file.size,
-            fileType: file.type,
-            totalChunks,
-            chunkIndex,
-            chunk: Array.from(chunk),
-            from: userId,
-            ts: Date.now(),
-            messageId,
-          }, onSent);
-        }
-      };
-      reader.readAsArrayBuffer(slice);
+      sentBytes += chunk.length;
+      const now = Date.now();
+      const interval = (now - lastTime) / 1000;
+      const speed = interval > 0 ? (sentBytes - lastSentBytes) / interval : 0;
+      const percent = Math.min(100, (sentBytes / file.size) * 100);
+      const eta = speed > 0 ? (file.size - sentBytes) / speed : 0;
+      events.onFileUploadProgress?.({
+        fileId,
+        name: file.name,
+        size: file.size,
+        sent: sentBytes,
+        total: file.size,
+        percent,
+        speed,
+        eta,
+      });
+      lastSentBytes = sentBytes;
+      lastTime = now;
     }
-    sendNextChunk();
   }
 
   function sendCall(type: 'audio' | 'video') {
