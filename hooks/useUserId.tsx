@@ -1,0 +1,1 @@
+// NOTE: This file is not used for user naming anymore. User names are now handled in useUserProfile.ts with no digits appended. 

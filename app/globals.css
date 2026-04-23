@@ -1,0 +1,266 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+body {
+  font-family: Arial, Helvetica, sans-serif;
+}
+
+@layer utilities {
+  .text-balance {
+    text-wrap: balance;
+  }
+}
+
+@layer base {
+  :root {
+    --background: 0 0% 100%;
+    --foreground: 0 0% 3.9%;
+    --card: 0 0% 100%;
+    --card-foreground: 0 0% 3.9%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 0 0% 3.9%;
+    --primary: 0 0% 9%;
+    --primary-foreground: 0 0% 98%;
+    --secondary: 0 0% 96.1%;
+    --secondary-foreground: 0 0% 9%;
+    --muted: 0 0% 96.1%;
+    --muted-foreground: 0 0% 45.1%;
+    --accent: 0 0% 96.1%;
+    --accent-foreground: 0 0% 9%;
+    --destructive: 0 84.2% 60.2%;
+    --destructive-foreground: 0 0% 98%;
+    --border: 0 0% 89.8%;
+    --input: 0 0% 89.8%;
+    --ring: 0 0% 3.9%;
+    --chart-1: 12 76% 61%;
+    --chart-2: 173 58% 39%;
+    --chart-3: 197 37% 24%;
+    --chart-4: 43 74% 66%;
+    --chart-5: 27 87% 67%;
+    --radius: 0.5rem;
+    --sidebar-background: 0 0% 98%;
+    --sidebar-foreground: 240 5.3% 26.1%;
+    --sidebar-primary: 240 5.9% 10%;
+    --sidebar-primary-foreground: 0 0% 98%;
+    --sidebar-accent: 240 4.8% 95.9%;
+    --sidebar-accent-foreground: 240 5.9% 10%;
+    --sidebar-border: 220 13% 91%;
+    --sidebar-ring: 217.2 91.2% 59.8%;
+  }
+  .dark {
+    --background: 0 0% 3.9%;
+    --foreground: 0 0% 98%;
+    --card: 0 0% 3.9%;
+    --card-foreground: 0 0% 98%;
+    --popover: 0 0% 3.9%;
+    --popover-foreground: 0 0% 98%;
+    --primary: 0 0% 98%;
+    --primary-foreground: 0 0% 9%;
+    --secondary: 0 0% 14.9%;
+    --secondary-foreground: 0 0% 98%;
+    --muted: 0 0% 14.9%;
+    --muted-foreground: 0 0% 63.9%;
+    --accent: 0 0% 14.9%;
+    --accent-foreground: 0 0% 98%;
+    --destructive: 0 62.8% 30.6%;
+    --destructive-foreground: 0 0% 98%;
+    --border: 0 0% 14.9%;
+    --input: 0 0% 14.9%;
+    --ring: 0 0% 83.1%;
+    --chart-1: 220 70% 50%;
+    --chart-2: 160 60% 45%;
+    --chart-3: 30 80% 55%;
+    --chart-4: 280 65% 60%;
+    --chart-5: 340 75% 55%;
+    --sidebar-background: 240 5.9% 10%;
+    --sidebar-foreground: 240 4.8% 95.9%;
+    --sidebar-primary: 224.3 76.3% 48%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 240 3.7% 15.9%;
+    --sidebar-accent-foreground: 240 4.8% 95.9%;
+    --sidebar-border: 240 3.7% 15.9%;
+    --sidebar-ring: 217.2 91.2% 59.8%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground;
+  }
+}
+
+/* Mobile Safari safe area utilities */
+@layer utilities {
+  .pb-safe-area-inset-bottom {
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
+  
+  .pt-safe-area-inset-top {
+    padding-top: env(safe-area-inset-top, 0px);
+  }
+  
+  .pl-safe-area-inset-left {
+    padding-left: env(safe-area-inset-left, 0px);
+  }
+  
+  .pr-safe-area-inset-right {
+    padding-right: env(safe-area-inset-right, 0px);
+  }
+  
+  .safe-area-inset-bottom {
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
+  
+  .safe-area-inset-top {
+    padding-top: env(safe-area-inset-top, 0px);
+  }
+  
+  .safe-area-inset-left {
+    padding-left: env(safe-area-inset-left, 0px);
+  }
+  
+  .safe-area-inset-right {
+    padding-right: env(safe-area-inset-right, 0px);
+  }
+  
+  .h-dynamic-viewport {
+    height: 100vh;
+    height: 100dvh;
+  }
+  
+  .min-h-dynamic-viewport {
+    min-height: 100vh;
+    min-height: 100dvh;
+  }
+}
+
+/* Mobile Safari specific styles */
+@supports (-webkit-touch-callout: none) {
+  .mobile-safari-input {
+    position: sticky;
+    bottom: 0;
+    background: var(--background);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    z-index: 50;
+    border-top: 1px solid var(--border);
+    box-shadow: 0 -2px 10px rgba(0, 0, 0, 0.1);
+  }
+  
+  .mobile-safari-input:focus-within {
+    box-shadow: 0 -4px 20px rgba(0, 0, 0, 0.15);
+  }
+  
+  /* Safe area indicator for debugging */
+  .safe-area-indicator {
+    border-bottom: var(--safe-area-indicator, none);
+  }
+  
+  /* Fix for input positioning issues */
+  .chat-container {
+    display: flex;
+    flex-direction: column;
+    height: 100dvh;
+    height: 100vh;
+    overflow: hidden;
+  }
+  
+  .chat-messages {
+    flex: 1;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+  
+  .chat-input-container {
+    flex-shrink: 0;
+    position: relative;
+    background: var(--background);
+    border-top: 1px solid var(--border);
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
+  
+  /* Prevent input from jumping */
+  .chat-input-container input {
+    font-size: 16px !important;
+    transform: translateZ(0);
+    -webkit-transform: translateZ(0);
+  }
+}
+
+/* Enhanced mobile input styles */
+@media (max-width: 768px) {
+  .mobile-input-container {
+    background: linear-gradient(180deg, transparent 0%, var(--background) 20%);
+  }
+  
+  .mobile-input-focus {
+    transform: scale(1.02);
+    box-shadow: 0 0 0 3px rgba(var(--primary), 0.1);
+  }
+  
+  .mobile-button-pulse {
+    animation: pulse 2s infinite;
+  }
+  
+  @keyframes pulse {
+    0%, 100% {
+      opacity: 1;
+    }
+    50% {
+      opacity: 0.7;
+    }
+  }
+  
+  .mobile-input-glow {
+    box-shadow: 0 0 20px rgba(var(--primary), 0.2);
+  }
+  
+  /* Voice recorder mobile fixes */
+  .voice-recorder-mobile {
+    position: fixed !important;
+    bottom: calc(5rem + env(safe-area-inset-bottom, 0px) + 1rem) !important;
+    left: 50% !important;
+    transform: translateX(-50%) !important;
+    z-index: 9999 !important;
+    max-width: calc(100vw - 2rem) !important;
+    width: calc(100vw - 2rem) !important;
+    margin: 0 1rem !important;
+  }
+  
+  /* Ensure viewport height is properly handled */
+  html, body {
+    height: 100%;
+    height: 100vh;
+    height: 100dvh;
+    overflow-x: hidden;
+  }
+  
+  /* Fix for mobile browsers that don't support dvh */
+  @supports not (height: 100dvh) {
+    html, body {
+      height: 100vh;
+    }
+  }
+  
+  /* Ensure fixed positioned elements are visible */
+  .fixed {
+    position: fixed !important;
+  }
+  
+  /* Voice recorder specific mobile styles */
+  .voice-recorder-container {
+    position: fixed !important;
+    bottom: calc(5rem + env(safe-area-inset-bottom, 0px) + 1rem) !important;
+    left: 50% !important;
+    transform: translateX(-50%) !important;
+    z-index: 9999 !important;
+    max-width: calc(100vw - 2rem) !important;
+    width: calc(100vw - 2rem) !important;
+    margin: 0 1rem !important;
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15) !important;
+  }
+}
